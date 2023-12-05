@@ -3,6 +3,9 @@
 
 This is a simple trivia game where people can join and play together. 
 
+## Made with
+`NextJs`, `Socket.js`, `Tailwind`
+
   
 
 ## Getting Started

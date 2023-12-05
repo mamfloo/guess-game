@@ -170,8 +170,6 @@ async function startGame(roomId) {
 
 function sendNextQuestion(roomId) {
   const currentQuestionIndex = activeGames[roomId].currentQuestionIndex;
-  console.log("current question index " + currentQuestionIndex);
-  console.log("questions ", activeGames[roomId].questions)
   //increment the current question index or game over if no more questions
   activeGames[roomId].currentQuestionIndex += 1;
   // send the current question to all players inside a room
