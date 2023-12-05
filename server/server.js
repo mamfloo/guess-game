@@ -3,6 +3,9 @@ const { Server } = require("socket.io");
 const cors = require("cors");
 const express = require("express");
 const app = express();
+const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const he = require("he");
+const appConfig = require("../appConfig.json");
 
 const httpServer = http.createServer(app);
 
@@ -23,30 +26,30 @@ io.on("connection", (socket) => {
   socket.on("join_room", ({roomId, userName}) => {
     
     console.log("A user connected:", socket.id);
-    if(activeGames[roomId] && activeGames[roomId].players.length === 2) {
+    if(activeGames[roomId] && activeGames[roomId].players.length === appConfig.maxPlayers) {
       //notify player that the room is full
-      socket.emit("room_full");
+      socket.emit("cannot_join", "Room is full");
+      return;
+    }
+    if(activeGames[roomId] && activeGames[roomId].players.find(player => player.username === userName)){
+      //notify player that the username is already taken
+      socket.emit("cannot_join", "Username already taken");
       return;
     }
     socket.join(roomId);
     console.log(`user with id-${socket.id} joined room - ${roomId}`);
 
     //initialize game or check if game for that room already exists
-    activeGames[roomId] = activeGames[roomId] || {
-      players: [],
-      questions: [
-        {
-          question: "Who is captain america?", 
-          answer: "nick"
-        }, 
-        {
-          question: "Who is nick?", 
-          answer: "parker"
-        }],
-      currentQuestionIndex: 0,
-      //states: 0: waiting for players, 1: playing, 2: ended
-      state: 0
-    };
+    if(activeGames[roomId] === undefined || activeGames[roomId].state === 2) {
+      activeGames[roomId] = {
+        players: activeGames[roomId] ? activeGames[roomId].players : [],
+        questions: [],
+        currentQuestionIndex: 0,
+        //states: 0: waiting for players, 1: playing, 2: ended
+        state: 0
+      };
+      console.log("questions fetched", activeGames[roomId].questions)
+    } 
 
     //add player to game
     activeGames[roomId].players.push({username: userName, score: 0, isReady: false});
@@ -78,15 +81,14 @@ io.on("connection", (socket) => {
     const currentPlayer = activeGames[roomId].players.find(player => player.username === user);
     if(currentPlayer) {
       //current answer - 1
+      io.to(roomId).emit("message_receiver", data)
       const correctAnswer = activeGames[roomId].questions[activeGames[roomId].currentQuestionIndex -1].answer;
-      console.log("inside" + msg);
-      console.log("inside" + correctAnswer);
-      if(correctAnswer === msg) {
+      if(correctAnswer.toLowerCase() === msg.toLowerCase()) {
         currentPlayer.score += 1;
         //notify players that the answer was correct
         const playerGuessedMessage = {
           roomId: roomId,
-          user: user,
+          user: "Server",
           msg: `${user} guessed, correct answer was "${msg}"`,
           time: new Date().getTime(),
         }
@@ -95,11 +97,6 @@ io.on("connection", (socket) => {
         sendNextQuestion(roomId);
       }
     }
-    console.log("cuurrent player" + currentPlayer);
-    console.log("player id" + activeGames[roomId].players[0].username + " " + activeGames[roomId].players[1].username);
-    console.log("socket id" + user);
-    console.log("outside" + msg);
-
   });
 
   socket.on("user_disconnected", ({roomId, username}) => {
@@ -108,6 +105,9 @@ io.on("connection", (socket) => {
       activeGames[roomId].players = activeGames[roomId].players.filter(player => player.username !== username);
       //update the client "players" let with the new players 
       io.to(roomId).emit("server_status", activeGames[roomId].players)
+      if(activeGames[roomId].players.length === 0) {
+        delete activeGames[roomId];
+      }
     }
   })
 
@@ -115,7 +115,6 @@ io.on("connection", (socket) => {
     if(activeGames[roomId]) {
       const player = activeGames[roomId].players.find(player => player.username === username);
       if(player) {
-        console.log("player found " + player.username);
         player.isReady = true;
       }
       //send the players that are ready
@@ -137,7 +136,22 @@ io.on("connection", (socket) => {
   });
 }); 
 
-function startGame(roomId) {
+async function startGame(roomId) {
+  //make a request to the trivia api to get the questions
+  const questionData = await fetch(`https://opentdb.com/api.php?amount=${appConfig.questionsPerGame}&type=multiple`);
+  const questions = await questionData.json();
+  questions.results.forEach(question => {
+    question.question = he.decode(question.question);
+    question.correct_answer = he.decode(question.correct_answer);
+    question.incorrect_answers = question.incorrect_answers.map(answer => he.decode(answer));})
+  //set the questions
+  activeGames[roomId].questions = questions.results.map(question => {
+    return {
+      question: question.question,
+      answer: question.correct_answer,
+      incorrectAnswers: question.incorrect_answers
+    }
+  });
   //send the start game message to all players inside a room
   const message = {
     roomId: roomId,
@@ -146,6 +160,8 @@ function startGame(roomId) {
     time: new Date().getTime(),
   }
   io.to(roomId).emit("message_receiver", message);
+  //set the state to playing
+  activeGames[roomId].state = 1;
   //send the first question after 2 seconds
   setTimeout(() => {
     sendNextQuestion(roomId);
@@ -153,19 +169,24 @@ function startGame(roomId) {
 }
 
 function sendNextQuestion(roomId) {
+  const currentQuestionIndex = activeGames[roomId].currentQuestionIndex;
+  console.log("current question index " + currentQuestionIndex);
+  console.log("questions ", activeGames[roomId].questions)
+  //increment the current question index or game over if no more questions
+  activeGames[roomId].currentQuestionIndex += 1;
   // send the current question to all players inside a room
-  if(activeGames[roomId].currentQuestionIndex <= activeGames[roomId].questions.length -1) {
+  if(activeGames[roomId].currentQuestionIndex <= activeGames[roomId].questions.length) {
+    //order the answers randomly alphabetically
+    const answerShuffled = [activeGames[roomId].questions[currentQuestionIndex].answer, ...activeGames[roomId].questions[currentQuestionIndex].incorrectAnswers].sort();
     const question = {
       roomId: roomId,
       user: "Server",
-      msg: activeGames[roomId].questions[activeGames[roomId].currentQuestionIndex].question,
+      msg: activeGames[roomId].questions[currentQuestionIndex].question + " \n a) "  + answerShuffled[0] + "\n b) " 
+      + answerShuffled[1] + "\n c) " + answerShuffled[2]  + "\n d) " + answerShuffled[3],
       time: new Date().getTime(),
     }
     io.to(roomId).emit("message_receiver", question)
-    //increment the current question index or game over if no more questions
-    activeGames[roomId].currentQuestionIndex += 1;
   } else {
-    activeGames[roomId].state = 2;
     gameOver(roomId);
   }
 }
@@ -184,6 +205,8 @@ function gameOver(roomId) {
     io.to(roomId).emit("game_over", message)
     //reset the current question index
     activeGames[roomId].currentQuestionIndex = 0;
+    activeGames[roomId].state = 2;
+    activeGames[roomId].questions = [];
   }, 1500);
   setTimeout(() => {
 

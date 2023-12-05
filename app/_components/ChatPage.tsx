@@ -1,7 +1,6 @@
 "use client"
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import RestartGame from "./(restartGame)/RestartGame";
-import { on } from "events";
 
 interface IMsgDataTypes {
   roomId: String | number;
@@ -17,6 +16,7 @@ const ChatPage = ({ socket, username, roomId }: any) => {
   const [players, setPlayers] = useState(0);
 
   const sendData = async (e: React.FormEvent<HTMLFormElement>) => {
+
     e.preventDefault();
     if (currentMsg !== "") {
       const msgData: IMsgDataTypes = {
@@ -33,11 +33,22 @@ const ChatPage = ({ socket, username, roomId }: any) => {
     }
   };
 
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    socket.on("message_receiver", (data: IMsgDataTypes) => {
-      setChat((pre) => [...pre, data]);
-    });
+    if(messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  },[chat])
 
+
+  useEffect(() => {
+    function onUserJoined(data: IMsgDataTypes) {
+      setChat((pre) => [...pre, data])
+    }
+    
+    socket.on("message_receiver", onUserJoined);
+
+    //user disconnected action
     const handleBeforeUnload = () => {
       socket.emit("user_disconnected", { roomId, username });
     }
@@ -46,6 +57,7 @@ const ChatPage = ({ socket, username, roomId }: any) => {
     //cleanup
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      socket.off("message_receiver", onUserJoined);
     }
   }, [socket, username, roomId]);
 
@@ -72,32 +84,43 @@ const ChatPage = ({ socket, username, roomId }: any) => {
     socket.on("user_joined", onUserJoined);
     socket.on("game_ready", onGameReady);
 
-
+    return () => {
+      socket.off("server_status", onServerStatus);
+      socket.off("game_over", onGameOver);
+      socket.off("user_joined", onUserJoined);
+      socket.off("game_ready", onGameReady);
+    }
   },[socket])
 
   return (
-    <div className="w-1/3 h-full flex flex-col">
-      <div className="mb-5 border-2 border-black rounded-md p-2">
+    <div className="w-full h-full flex flex-col min-w-[450px] md:w-1/3 ">
+      <div className="mt-1 border-2 border-black rounded-md p-2 mx-2">
         <p>
           Name: <b>{username}</b> and Room Id: <b>{roomId}</b>
         </p>
       </div>
-      <div className="flex-grow flex h-full flex-col justify-between">
+      <div  
+        className="flex-grow flex h-full flex-col justify-between overflow-scroll px-4">
         <div >
           {chat.map(({ roomId, user, msg, time }, key) => (
             <div
               key={key}
-              className={`${user === username ? "text-right" : "text-left"} my-4`}
+              className={`${user === username ? "items-end" : "items-start"} my-4 flex flex-col`}
             >
-              <span
-                className={`${user === username ? "text-green-600 bg-green-50" : "text-blue-600 bg-blue-50 "} p-2 rounded-md`}
+              <div
+                className={`${user === username ? "text-green-600 bg-green-50" : user === "Server" ? "text-violet-600 bg-gray-50"  : "text-blue-600 bg-blue-50 "} p-2 rounded-md space-y-2 w-fit`}
               >
-                {user !== username && (<>{user}:</>) } {msg}
-              </span>
+                {user !== username && (<p className="inline-block">{user}:&nbsp;</p>) } 
+                {!msg.includes("\n") ? <p className="inline-block">{msg}</p>: msg.split("\n").map((m, key) => (
+                  <p key={key}>{m}</p>
+                ))}
+              </div>
             </div>
           ))}
         </div>
-        <div className="mb-5">
+        <div ref={messagesEndRef}></div>
+      </div>
+      <div className="mb-2">
           <form onSubmit={(e) => sendData(e)}
             className="flex gap-2">
             <input
@@ -110,7 +133,6 @@ const ChatPage = ({ socket, username, roomId }: any) => {
             <button className="border-2 border-black rounded-md p-2 bg-black text-white">Send</button>
           </form>
         </div>
-      </div>
       {isGameOver && 
         <RestartGame socket={socket} roomId={roomId} username={username} players={players}/>
       }
@@ -119,3 +141,7 @@ const ChatPage = ({ socket, username, roomId }: any) => {
 };
 
 export default ChatPage;
+
+function userRef<T>(arg0: null) {
+  throw new Error("Function not implemented.");
+}
